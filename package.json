@@ -1,0 +1,28 @@
+{
+  "name": "bot-stickers-sonido",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bot de WhatsApp que convierte un video en un sticker con sonido (no afiliado a WhatsApp ni a Meta).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\"",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "dev": "npm run build && npm start"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "9.14.0",
+    "protobufjs": "7.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.7",
+    "typescript": "5.9.3"
+  }
+}

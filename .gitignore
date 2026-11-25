@@ -1,0 +1,21 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# WhatsApp session (credentials): never commit
+auth/
+
+# Dependencies and build output
+node_modules/
+dist/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+.tmp/
+
+# Logs
+*.log
+npm-debug.log*
