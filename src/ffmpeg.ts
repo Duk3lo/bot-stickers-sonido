@@ -2,14 +2,18 @@ import { execFile } from "node:child_process";
 
 export const STICKER_SIZE = 512;
 export const STICKER_MAX_BYTES = 500_000;
-export const STICKER_MAX_SECONDS = 8;
+export const STICKER_MAX_SECONDS = 10;
 export const AUDIO_SAMPLE_RATE = 48_000;
 
 /** Error raised when ffmpeg/ffprobe fail or time out. The message is in Spanish. */
 export class FfmpegError extends Error {
-  constructor(message: string) {
+  /** Exit code of the process, when it ended with one. */
+  readonly exitCode: number | undefined;
+
+  constructor(message: string, exitCode?: number) {
     super(message);
     this.name = "FfmpegError";
+    this.exitCode = exitCode;
   }
 }
 
@@ -20,12 +24,18 @@ export interface VideoStickerOptions {
   readonly fps: number;
   /** libwebp quality, 0 (worst) to 100 (best). */
   readonly quality: number;
+  /** Start of the clip in the input, in seconds. */
+  readonly start?: number;
+  /** End of the clip in the input, in seconds. */
+  readonly end?: number;
 }
 
 export interface AudioOptions {
   readonly input: string;
   readonly output: string;
   readonly seconds: number;
+  readonly start?: number;
+  readonly end?: number;
 }
 
 function assertPositive(name: string, value: number): void {
@@ -34,7 +44,24 @@ function assertPositive(name: string, value: number): void {
   }
 }
 
-/** Arguments for an animated 512x512 WebP, transparent padding, no audio, at most 8 s. */
+/** Input-side arguments that select the clip; empty when no range was asked for. */
+function rangeArgs(start: number | undefined, end: number | undefined): string[] {
+  if (start !== undefined && (!Number.isFinite(start) || start < 0)) {
+    throw new RangeError(`start debe ser un número mayor o igual que 0 (valor: ${start}).`);
+  }
+  if (end !== undefined) {
+    assertPositive("end", end);
+    if (end <= (start ?? 0)) {
+      throw new RangeError(`end debe ser mayor que start (start: ${start ?? 0}, end: ${end}).`);
+    }
+  }
+  return [
+    ...(start === undefined ? [] : ["-ss", String(start)]),
+    ...(end === undefined ? [] : ["-to", String(end)]),
+  ];
+}
+
+/** Arguments for an animated 512x512 WebP, transparent padding, no audio, at most 10 s. */
 export function buildVideoStickerArgs(options: VideoStickerOptions): string[] {
   assertPositive("seconds", options.seconds);
   assertPositive("fps", options.fps);
@@ -54,6 +81,7 @@ export function buildVideoStickerArgs(options: VideoStickerOptions): string[] {
     "-loglevel",
     "error",
     "-y",
+    ...rangeArgs(options.start, options.end),
     "-i",
     options.input,
     "-t",
@@ -79,6 +107,37 @@ export function buildVideoStickerArgs(options: VideoStickerOptions): string[] {
   ];
 }
 
+/** Exit code of conversor-stickers when the clip does not fit the preset's weight or duration. */
+export const CONVERSOR_EXIT_TOO_LARGE = 5;
+
+export interface ConversorOptions {
+  readonly input: string;
+  readonly output: string;
+  /** Start of the clip in the input, in seconds. */
+  readonly start: number;
+  /** Length of the clip, in seconds (capped to the 10 s of the sticker). */
+  readonly seconds: number;
+}
+
+/** Arguments for the conversor-stickers CLI with the WhatsApp sticker preset. */
+export function buildConversorArgs(options: ConversorOptions): string[] {
+  assertPositive("seconds", options.seconds);
+  if (!Number.isFinite(options.start) || options.start < 0) {
+    throw new RangeError(`start debe ser un número mayor o igual que 0 (valor: ${options.start}).`);
+  }
+  return [
+    options.input,
+    "--preset",
+    "whatsapp-sticker",
+    "-o",
+    options.output,
+    "--start",
+    String(options.start),
+    "--max-seconds",
+    String(Math.min(options.seconds, STICKER_MAX_SECONDS)),
+  ];
+}
+
 /** Arguments for mono OGG Opus at 48 kHz, no video, at most `seconds`. */
 export function buildAudioArgs(options: AudioOptions): string[] {
   assertPositive("seconds", options.seconds);
@@ -87,6 +146,7 @@ export function buildAudioArgs(options: AudioOptions): string[] {
     "-loglevel",
     "error",
     "-y",
+    ...rangeArgs(options.start, options.end),
     "-i",
     options.input,
     "-t",
@@ -113,6 +173,11 @@ export function buildProbeArgs(input: string): string[] {
   return ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input];
 }
 
+/** Arguments that print one line per audio stream; empty output means the file has no audio. */
+export function buildAudioProbeArgs(input: string): string[] {
+  return ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", input];
+}
+
 export interface RunOptions {
   readonly timeoutMs: number;
   readonly binary?: string;
@@ -137,6 +202,7 @@ export function runBinary(args: readonly string[], options: RunOptions): Promise
               timedOut
                 ? `${binary} tardó demasiado y se canceló.`
                 : `${binary} falló al procesar el archivo.`,
+              typeof error.code === "number" ? error.code : undefined,
             ),
           );
           return;
@@ -155,4 +221,10 @@ export async function probeDurationSeconds(input: string, timeoutMs: number): Pr
     throw new FfmpegError("No pude leer la duración del video.");
   }
   return duration;
+}
+
+/** Returns whether the input has at least one audio stream. */
+export async function hasAudioStream(input: string, timeoutMs: number): Promise<boolean> {
+  const stdout = await runBinary(buildAudioProbeArgs(input), { timeoutMs, binary: "ffprobe" });
+  return stdout.trim().length > 0;
 }

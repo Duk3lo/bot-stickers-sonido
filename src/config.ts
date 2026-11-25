@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
 /** Wire formats supported for the sound sticker (see README, "Formato del protocolo"). */
 export const WIRE_FORMATS = ["sticker-field-26", "audio-sticker-134"] as const;
 export type WireFormat = (typeof WIRE_FORMATS)[number];
@@ -8,6 +11,8 @@ export interface Config {
   readonly authDir: string;
   readonly pairingPhone: string | undefined;
   readonly wireFormat: WireFormat;
+  /** Path to the conversor-stickers binary; when absent the WebP is made with ffmpeg. */
+  readonly conversorBin: string | undefined;
 }
 
 /** Thrown when the environment is invalid. The message is shown to the user in Spanish. */
@@ -19,7 +24,7 @@ export class ConfigError extends Error {
 }
 
 const PHONE_PATTERN = /^\d{6,15}$/;
-const MAX_SOUND_SECONDS_LIMIT = 10;
+const MAX_SOUND_SECONDS_LIMIT = 60;
 const DEFAULT_MAX_SOUND_SECONDS = 10;
 const DEFAULT_AUTH_DIR = "./auth";
 const DEFAULT_WIRE_FORMAT: WireFormat = "sticker-field-26";
@@ -84,6 +89,18 @@ function parseWireFormat(raw: string | undefined, problems: string[]): WireForma
   return found;
 }
 
+function parseConversorBin(raw: string | undefined, problems: string[]): string | undefined {
+  const path = raw?.trim();
+  if (path === undefined || path === "") {
+    return undefined;
+  }
+  if (!isAbsolute(path) || !existsSync(path)) {
+    problems.push(`CONVERSOR_BIN debe ser una ruta absoluta a un archivo existente (valor recibido: "${path}").`);
+    return undefined;
+  }
+  return path;
+}
+
 /**
  * Reads and validates the configuration from environment variables.
  * Collects every problem and throws a single ConfigError listing them all.
@@ -91,9 +108,16 @@ function parseWireFormat(raw: string | undefined, problems: string[]): WireForma
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const problems: string[] = [];
 
+  if (env["ACEPTO_AVISO"]?.trim() !== "si") {
+    problems.push(
+      "Falta ACEPTO_AVISO=si en .env. Lee AVISO.md y, si lo aceptas, añade esa línea para poder arrancar el bot.",
+    );
+  }
+
   const allowedNumbers = parseAllowedNumbers(env["ALLOWED_NUMBERS"], problems);
   const maxSoundSeconds = parseMaxSoundSeconds(env["MAX_SOUND_SECONDS"], problems);
   const wireFormat = parseWireFormat(env["SOUND_WIRE_FORMAT"], problems);
+  const conversorBin = parseConversorBin(env["CONVERSOR_BIN"], problems);
 
   const authDir = env["AUTH_DIR"]?.trim() || DEFAULT_AUTH_DIR;
 
@@ -118,5 +142,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     authDir,
     pairingPhone,
     wireFormat,
+    conversorBin,
   };
 }
