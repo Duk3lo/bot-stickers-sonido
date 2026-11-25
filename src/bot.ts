@@ -13,13 +13,14 @@ import makeWASocket, {
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
+import { isHelpRequest, parseSettings } from "./ajustes.js";
 import { isAllowedJid, phoneFromJid } from "./allowlist.js";
 import type { Config } from "./config.js";
-import { ConfigError } from "./config.js";
 import { JobGate } from "./job-gate.js";
 import { writeInput, buildSoundSticker, StickerTooLargeError } from "./process-video.js";
 import { FfmpegError } from "./ffmpeg.js";
 import { logger as rootLogger, type Logger } from "./logger.js";
+import { MSG_LINKED, printPairingCode, printQr } from "./vinculacion.js";
 import { AudioStickerRegistry, installSoundStickerPatch } from "./sound-sticker.js";
 
 const MAX_INPUT_BYTES = 25 * 1024 * 1024;
@@ -28,7 +29,12 @@ const RECONNECT_DELAY_MS = 5_000;
 
 const MSG_HELP =
   "Envíame un video corto (o un video enviado como documento) y te devuelvo un sticker con sonido. " +
-  "Puedes recortar el clip antes con la app «Conversor de stickers», opción «Sticker con sonido».";
+  "Puedes recortar el clip antes con la app «Conversor de stickers», opción «Sticker con sonido».\n\n" +
+  "También puedes escribir ajustes en el texto del video, todos opcionales:\n" +
+  "inicio=2 fin=7 sonido=5\n" +
+  "• inicio y fin: segundos del tramo que quieres (admite decimales, ej. 2,5).\n" +
+  "• sonido: segundos de audio, entero de 1 al máximo permitido.\n" +
+  "Escribe «ayuda» para ver esto de nuevo.";
 const MSG_NOT_VIDEO = "Eso no es un video. Envíame un video corto para crear el sticker.";
 const MSG_TOO_LARGE = "El video supera el límite de 25 MB. Envía un clip más corto.";
 const MSG_BUSY = "Ya estoy procesando un video tuyo. Espera a que termine.";
@@ -36,9 +42,15 @@ const MSG_RATE_LIMITED = "Has enviado demasiados videos seguidos. Espera unos mi
 const MSG_PROCESSING = "Procesando el video…";
 const MSG_FALLBACK =
   "No pude enviar el sticker con sonido, así que te envié el sticker animado sin audio.";
+const MSG_NO_AUDIO = "Ese video no tiene sonido, así que te envié el sticker animado sin audio.";
+export function imageShorterMessage(videoSeconds: number, audioSeconds: number): string | undefined {
+  if (audioSeconds <= videoSeconds) return undefined;
+  return `La imagen dura ${Number(videoSeconds.toFixed(1))} s; el resto del sonido suena con la imagen quieta.`;
+}
 const MSG_FAILED = "No pude procesar ese video. Prueba con otro archivo.";
 
 interface VideoRef {
+  readonly caption: string | undefined;
   readonly fileLength: number | undefined;
   readonly mimetype: string | undefined;
 }
@@ -51,13 +63,18 @@ function findVideo(message: WAMessage): VideoRef | undefined {
   }
   if (content.videoMessage) {
     return {
+      caption: content.videoMessage.caption ?? undefined,
       fileLength: toNumber(content.videoMessage.fileLength),
       mimetype: content.videoMessage.mimetype ?? undefined,
     };
   }
   const document = content.documentMessage;
   if (document?.mimetype?.startsWith("video/")) {
-    return { fileLength: toNumber(document.fileLength), mimetype: document.mimetype };
+    return {
+      caption: document.caption ?? undefined,
+      fileLength: toNumber(document.fileLength),
+      mimetype: document.mimetype,
+    };
   }
   return undefined;
 }
@@ -122,12 +139,6 @@ async function connectOnce(
 ): Promise<"logged-out" | "closed"> {
   const { state, saveCreds } = await useMultiFileAuthState(deps.config.authDir);
 
-  if (!state.creds.registered && deps.config.pairingPhone === undefined) {
-    throw new ConfigError(
-      "Falta PAIRING_PHONE: es la primera vez que se inicia sesión. Indica tu número con código de país.",
-    );
-  }
-
   const sock = makeWASocket({
     auth: state,
     browser: Browsers.ubuntu("Chrome"),
@@ -143,10 +154,8 @@ async function connectOnce(
       sock
         .requestPairingCode(phone)
         .then((code) => {
-          log.info(
-            { code },
-            `Código de vinculación: ${code}. En WhatsApp: Dispositivos vinculados > Vincular con número de teléfono.`,
-          );
+          printPairingCode(code);
+          log.info("Código de vinculación mostrado en la terminal.");
         })
         .catch((error: unknown) => {
           log.error({ err: error }, "No pude pedir el código de vinculación.");
@@ -156,6 +165,12 @@ async function connectOnce(
 
   return new Promise((resolve) => {
     sock.ev.on("connection.update", (update) => {
+      if (update.qr && !state.creds.registered && deps.config.pairingPhone === undefined) {
+        printQr(update.qr);
+      }
+      if (update.isNewLogin) {
+        process.stdout.write(`\n${MSG_LINKED}\n`);
+      }
       if (update.connection === "open") {
         log.info("Conectado a WhatsApp.");
       }
@@ -168,6 +183,7 @@ async function connectOnce(
 
     sock.ev.on("messages.upsert", ({ messages, type }) => {
       if (type !== "notify") {
+        log.debug({ type, count: messages.length }, "Mensajes que no son notificación nueva; ignorados.");
         return;
       }
       for (const message of messages) {
@@ -187,11 +203,22 @@ export async function handleMessage(
   gate: JobGate,
   log: Logger,
 ): Promise<void> {
+  log.debug(
+    {
+      remoteJid: message.key.remoteJid,
+      remoteJidAlt: message.key.remoteJidAlt,
+      fromMe: message.key.fromMe,
+      stubType: message.messageStubType,
+      contentKeys: Object.keys(message.message ?? {}),
+    },
+    "Mensaje recibido.",
+  );
   if (message.key.fromMe) {
     return;
   }
   const chat = message.key.remoteJid ?? "";
   if (chat.endsWith("@g.us") || chat.endsWith("@broadcast") || chat.endsWith("@newsletter")) {
+    log.debug("Mensaje de grupo, difusión o canal; ignorado.");
     return;
   }
 
@@ -205,7 +232,21 @@ export async function handleMessage(
   const sender = senderOf(message);
   const video = findVideo(message);
   if (!video) {
-    await sock.sendMessage(chat, { text: normalizeMessageContent(message.message)?.conversation ? MSG_NOT_VIDEO : MSG_HELP });
+    const content = normalizeMessageContent(message.message);
+    // Reactions, protocol and undecryptable messages are not conversation: do not answer them.
+    if (!content || content.reactionMessage || content.protocolMessage) {
+      log.debug("Mensaje sin contenido útil (reacción, protocolo o no descifrado); ignorado.");
+      return;
+    }
+    const askedForHelp = isHelpRequest(content.conversation ?? content.extendedTextMessage?.text);
+    await sock.sendMessage(chat, { text: content.conversation && !askedForHelp ? MSG_NOT_VIDEO : MSG_HELP });
+    return;
+  }
+
+  const parsed = parseSettings(video.caption, config.maxSoundSeconds);
+  if (!parsed.ok) {
+    const text = `${parsed.errors.join("\n")}\nEscribe «ayuda» para ver el formato.`;
+    await sock.sendMessage(chat, { text }, { quoted: message });
     return;
   }
 
@@ -237,13 +278,22 @@ export async function handleMessage(
       return;
     }
     const inputPath = await writeInput(workDir, data);
-    const files = await buildSoundSticker(inputPath, workDir, config.maxSoundSeconds);
+    const files = await buildSoundSticker(inputPath, workDir, config.maxSoundSeconds, parsed.settings, config.conversorBin);
     log.info(
       { videoSeconds: files.videoSeconds, audioSeconds: files.audioSeconds, trimmed: files.trimmed },
       "Sticker con sonido generado.",
     );
 
+    if (files.ogg === undefined) {
+      await sock.sendMessage(chat, { sticker: files.webp, isAnimated: true }, { quoted: message });
+      await sock.sendMessage(chat, { text: MSG_NO_AUDIO }, { quoted: message });
+      return;
+    }
     await sendSoundSticker(sock, chat, message, files.webp, files.ogg, registry, log);
+    const aviso = imageShorterMessage(files.videoSeconds, files.audioSeconds);
+    if (aviso !== undefined) {
+      await sock.sendMessage(chat, { text: aviso }, { quoted: message });
+    }
   } catch (error) {
     const text =
       error instanceof StickerTooLargeError || error instanceof FfmpegError ? error.message : MSG_FAILED;
