@@ -104,3 +104,12 @@ test("la CLI nunca recibe más de 8 segundos y rechaza valores inválidos", () =
   assert.throws(() => buildConversorArgs({ input: "a", output: "b", start: -1, seconds: 2 }), RangeError);
   assert.throws(() => buildConversorArgs({ input: "a", output: "b", start: 0, seconds: 0 }), RangeError);
 });
+
+test("con recorte se corta un cuadrado antes de escalar y no hace falta relleno", () => {
+  const args = buildVideoStickerArgs({ input: "a", output: "b", seconds: 5, fps: 15, quality: 60, crop: { zoom: 2, x: 0.25, y: 0.5 } });
+  const filter = args[args.indexOf("-vf") + 1] ?? "";
+  assert.equal(
+    filter,
+    "fps=15,crop=w='min(iw,ih)/2':h='min(iw,ih)/2':x='clip(iw*0.25-ow/2,0,iw-ow)':y='clip(ih*0.5-oh/2,0,ih-oh)',scale=512:512:flags=lanczos,format=rgba",
+  );
+});

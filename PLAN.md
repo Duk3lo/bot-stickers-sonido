@@ -54,3 +54,16 @@ aceptar el mismo aviso.
 - [x] D1. (97352cf) Sección «Extensiones (opcional)»: muestra el aviso, casilla «He leído y acepto», enlace al repo
   del bot. Sin aceptar, ni el campo «Número del bot» ni «Enviar al bot» aparecen. Aceptación guardada en
   local y revocable. Pruebas TS.
+
+## Fase 3: control desde la app (2026-11-26, rama `mejoras-vinculacion`)
+
+Contrato y reglas completas en la sección T4 de `PLAN.md` del repo conversor-stickers.
+- [x] G1. Pausa por defecto y ante cualquier desconexión; ignorar lo anterior a la activación; reconexión creciente.
+- [x] G2. Vinculación a demanda (código o QR) y desvinculación.
+- [x] G3. API local con token (solo 127.0.0.1).
+- [x] G4. Registros sin números, códigos, QR ni tokens.
+- [x] G5. Servicio `systemd --user`, README (Tailscale) y `.env.example`.
+- [x] G6. Modo de chat propio (`MODO_CHAT_PROPIO=si`, apagado por defecto): un video por activación.
+- Pendiente: prueba manual con WhatsApp real.
+- [x] G6. Modo de chat propio y encuadre (`encuadre=recortar zoom= x= y=`).
+- Pendiente: probar con WhatsApp real.

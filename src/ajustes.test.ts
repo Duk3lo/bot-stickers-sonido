@@ -65,3 +65,29 @@ test("la palabra suelta «ayuda» pide el formato", () => {
   assert.equal(isHelpRequest("ayuda por favor"), false);
   assert.equal(isHelpRequest(undefined), false);
 });
+
+test("el encuadre «recortar» lleva zoom y centro, con valores por defecto", () => {
+  assert.deepEqual(parseSettings("sonido=5 encuadre=recortar", MAX_SOUND), {
+    ok: true,
+    settings: { sound: 5, crop: { zoom: 1, x: 0.5, y: 0.5 } },
+  });
+  assert.deepEqual(parseSettings("encuadre=recortar zoom=1,5 x=0.25 y=1", MAX_SOUND), {
+    ok: true,
+    settings: { crop: { zoom: 1.5, x: 0.25, y: 1 } },
+  });
+  assert.deepEqual(parseSettings("encuadre=entero", MAX_SOUND), { ok: true, settings: {} });
+});
+
+test("un encuadre no válido se explica", () => {
+  for (const caption of [
+    "encuadre=otro",
+    "encuadre=recortar zoom=0.5",
+    "encuadre=recortar zoom=5",
+    "encuadre=recortar x=1.1",
+    "encuadre=recortar y=abc",
+    "zoom=2",
+    "encuadre=entero x=0.5",
+  ]) {
+    assert.equal(parseSettings(caption, MAX_SOUND).ok, false, caption);
+  }
+});
