@@ -1,3 +1,4 @@
+import type { Crop } from "./ajustes.js";
 import { execFile } from "node:child_process";
 
 export const STICKER_SIZE = 512;
@@ -28,6 +29,8 @@ export interface VideoStickerOptions {
   readonly start?: number;
   /** End of the clip in the input, in seconds. */
   readonly end?: number;
+  /** Fills the square with this part of the video instead of fitting all of it. */
+  readonly crop?: Crop;
 }
 
 export interface AudioOptions {
@@ -61,6 +64,27 @@ function rangeArgs(start: number | undefined, end: number | undefined): string[]
   ];
 }
 
+function framingFilters(crop: Crop | undefined): string[] {
+  const size = `${STICKER_SIZE}:${STICKER_SIZE}`;
+  if (crop === undefined) {
+    return [
+      `scale=${size}:force_original_aspect_ratio=decrease:flags=lanczos`,
+      "format=rgba",
+      `pad=${size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`,
+    ];
+  }
+  const { zoom, x, y } = crop;
+  if (![zoom, x, y].every(Number.isFinite) || zoom < 1) {
+    throw new RangeError(`recorte no válido (zoom: ${zoom}, x: ${x}, y: ${y}).`);
+  }
+  const side = `'min(iw,ih)/${zoom}'`;
+  return [
+    `crop=w=${side}:h=${side}:x='clip(iw*${x}-ow/2,0,iw-ow)':y='clip(ih*${y}-oh/2,0,ih-oh)'`,
+    `scale=${size}:flags=lanczos`,
+    "format=rgba",
+  ];
+}
+
 /** Arguments for an animated 512x512 WebP, transparent padding, no audio, at most 10 s. */
 export function buildVideoStickerArgs(options: VideoStickerOptions): string[] {
   assertPositive("seconds", options.seconds);
@@ -69,12 +93,7 @@ export function buildVideoStickerArgs(options: VideoStickerOptions): string[] {
     throw new RangeError(`quality debe ser un entero entre 0 y 100 (valor: ${options.quality}).`);
   }
   const seconds = Math.min(options.seconds, STICKER_MAX_SECONDS);
-  const filter = [
-    `fps=${options.fps}`,
-    `scale=${STICKER_SIZE}:${STICKER_SIZE}:force_original_aspect_ratio=decrease:flags=lanczos`,
-    "format=rgba",
-    `pad=${STICKER_SIZE}:${STICKER_SIZE}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`,
-  ].join(",");
+  const filter = [`fps=${options.fps}`, ...framingFilters(options.crop)].join(",");
 
   return [
     "-hide_banner",

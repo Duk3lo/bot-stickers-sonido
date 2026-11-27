@@ -54,3 +54,28 @@ aceptar el mismo aviso.
 - [x] D1. (97352cf) Sección «Extensiones (opcional)»: muestra el aviso, casilla «He leído y acepto», enlace al repo
   del bot. Sin aceptar, ni el campo «Número del bot» ni «Enviar al bot» aparecen. Aceptación guardada en
   local y revocable. Pruebas TS.
+
+## Fase 3: control desde la app (2026-11-26, rama `mejoras-vinculacion`)
+
+Contrato y reglas completas en la sección T4 de `PLAN.md` del repo conversor-stickers.
+- [x] G1. Pausa por defecto y ante cualquier desconexión; ignorar lo anterior a la activación; reconexión creciente.
+- [x] G2. Vinculación a demanda (código o QR) y desvinculación.
+- [x] G3. API local con token (solo 127.0.0.1).
+- [x] G4. Registros sin números, códigos, QR ni tokens.
+- [x] G5. Servicio `systemd --user`, README (Tailscale) y `.env.example`.
+- [x] G6. Modo de chat propio (`MODO_CHAT_PROPIO=si`, apagado por defecto): un video por activación.
+- Pendiente: prueba manual con WhatsApp real.
+- [x] G6. Modo de chat propio y encuadre (`encuadre=recortar zoom= x= y=`).
+- Pendiente: probar con WhatsApp real.
+
+## Fase 4: vincular desde la app sin tocar el `.env` (pedido el 2026-11-27)
+- [x] H1. `POST /vinculacion` admite `numero` (solo con `codigo`), validado en la API; sin él se usa
+  `PAIRING_PHONE`. Pruebas en control-api y whatsapp-session. README.
+- [x] H3. Enlace de conexión `conversorstickers://bot#u=…&t=…` y su QR al arrancar en terminal
+  interactiva (Tailscale si hay, si no 127.0.0.1). Pruebas en enlace-conexion y logger. README.
+- [x] H4. Conexión en la misma Wi-Fi sin Tailscale: `ESCUCHAR_EN_RED=si|no` (por defecto si, 0.0.0.0) con filtro
+  de origen (loopback, privadas, Tailscale) y de `Host` (IPv4 privada con puerto); token en
+  `~/.config/bot-stickers-sonido/` (0700/0600, migra el `./control-token` antiguo) con `conexion.json`;
+  el enlace prefiere la IPv4 privada de la PC (primera con QR, otras en texto) y avisa del cortafuegos (`ufw`).
+  Pruebas en red-local, control-token, control-api, config y enlace-conexion.
+- [ ] H2. App (conversor-stickers): campo para el número y QR visible también en Android.

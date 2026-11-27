@@ -31,8 +31,34 @@ test("falla con mensaje en español si falta ALLOWED_NUMBERS", () => {
 test("rechaza un número de la lista que no es válido", () => {
   assert.throws(
     () => loadConfig({ ...ACCEPTED, ALLOWED_NUMBERS: "34600111222,abc" }),
-    (error: unknown) => error instanceof ConfigError && /número no válido: "abc"/.test(error.message),
+    (error: unknown) => error instanceof ConfigError && /entrada 2 no es un número válido/.test(error.message),
   );
+});
+
+test("los errores de configuración no repiten los valores recibidos", () => {
+  const values = {
+    ALLOWED_NUMBERS: "valor-lista",
+    MAX_SOUND_SECONDS: "valor-segundos",
+    SOUND_WIRE_FORMAT: "valor-formato",
+    CONVERSOR_BIN: "valor-ruta",
+    PAIRING_PHONE: "valor-telefono",
+    CONTROL_PORT: "valor-puerto",
+  };
+  assert.throws(
+    () => loadConfig({ ...ACCEPTED, ...values }),
+    (error: unknown) =>
+      error instanceof ConfigError &&
+      Object.entries(values).every(([name, value]) => error.message.includes(name) && !error.message.includes(value)),
+  );
+});
+
+test("CONTROL_PORT tiene valor por defecto y se valida", () => {
+  assert.equal(loadConfig(VALID).controlPort, 8787);
+  const custom = loadConfig({ ...VALID, CONTROL_PORT: "9000" });
+  assert.equal(custom.controlPort, 9000);
+  for (const bad of ["0", "65536", "80.5", "ochenta"]) {
+    assert.throws(() => loadConfig({ ...VALID, CONTROL_PORT: bad }), ConfigError, bad);
+  }
 });
 
 test("MAX_SOUND_SECONDS acepta solo enteros entre 1 y 60", () => {
@@ -103,4 +129,25 @@ test("CONVERSOR_BIN rechaza rutas relativas o inexistentes", () => {
 test("PAIRING_PHONE vacío o ausente es válido (vinculación por QR)", () => {
   assert.equal(loadConfig({ ...VALID, PAIRING_PHONE: "" }).pairingPhone, undefined);
   assert.equal(loadConfig({ ...VALID }).pairingPhone, undefined);
+});
+
+test("MODO_CHAT_PROPIO está apagado por defecto y solo se enciende con «si»", () => {
+  assert.equal(loadConfig(VALID).ownChatMode, false);
+  assert.equal(loadConfig({ ...VALID, MODO_CHAT_PROPIO: "no" }).ownChatMode, false);
+  assert.equal(loadConfig({ ...VALID, MODO_CHAT_PROPIO: "si" }).ownChatMode, true);
+  assert.throws(
+    () => loadConfig({ ...VALID, MODO_CHAT_PROPIO: "yes" }),
+    (error: unknown) => error instanceof ConfigError && /MODO_CHAT_PROPIO/.test(error.message),
+  );
+});
+
+test("en modo de chat propio ALLOWED_NUMBERS es opcional", () => {
+  assert.equal(loadConfig({ ...ACCEPTED, MODO_CHAT_PROPIO: "si" }).allowedNumbers.size, 0);
+});
+
+test("ESCUCHAR_EN_RED es «si» por defecto y solo admite si o no", () => {
+  assert.equal(loadConfig(VALID).listenOnNetwork, true);
+  assert.equal(loadConfig({ ...VALID, ESCUCHAR_EN_RED: "si" }).listenOnNetwork, true);
+  assert.equal(loadConfig({ ...VALID, ESCUCHAR_EN_RED: "no" }).listenOnNetwork, false);
+  assert.throws(() => loadConfig({ ...VALID, ESCUCHAR_EN_RED: "quizá" }), ConfigError);
 });

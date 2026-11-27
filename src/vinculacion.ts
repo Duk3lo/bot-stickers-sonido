@@ -1,7 +1,5 @@
 import qrcode from "qrcode-terminal";
 
-export const MSG_LINKED = "Vinculado. Ya puedes enviarle vídeos desde tu número.";
-
 /** Formats the 8-character pairing code as ABCD-EFGH; any other length is returned unchanged. */
 export function formatPairingCode(raw: string): string {
   const code = raw.replace(/-/g, "").toUpperCase();

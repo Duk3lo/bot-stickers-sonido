@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { JobGate } from "./job-gate.js";
+import { DEFAULT_WINDOW_MS, JobGate } from "./job-gate.js";
 
 test("un solo trabajo a la vez por remitente", () => {
   const gate = new JobGate();
@@ -25,4 +25,19 @@ test("límite de trabajos por ventana deslizante", () => {
 
   clock = 1001;
   assert.equal(gate.tryStart("a"), "started", "el primero ya salió de la ventana");
+});
+
+test("respuestas sin trabajo: una por tipo y un tope por chat cada 10 minutos", () => {
+  let now = 0;
+  const gate = new JobGate({ now: () => now });
+  assert.equal(gate.tryNotice("a", "ayuda"), true);
+  assert.equal(gate.tryNotice("a", "ayuda"), false);
+  assert.equal(gate.tryNotice("a", "no-es-video"), true);
+  assert.equal(gate.tryNotice("a", "ajustes"), true);
+  assert.equal(gate.tryNotice("a", "ocupado"), false);
+  assert.equal(gate.tryNotice("b", "ocupado"), true);
+  now = DEFAULT_WINDOW_MS - 1;
+  assert.equal(gate.tryNotice("a", "ayuda"), false);
+  now = DEFAULT_WINDOW_MS;
+  assert.equal(gate.tryNotice("a", "ayuda"), true);
 });

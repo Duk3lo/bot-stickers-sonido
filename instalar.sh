@@ -31,7 +31,10 @@ if [[ -d "$conversor_dir" ]]; then
   if command -v cargo >/dev/null 2>&1; then
     echo "Compilando conversor-stickers en $conversor_dir..."
     (cd "$conversor_dir" && cargo build --release -p conversor-stickers)
-    conversor_bin="$(cd "$conversor_dir" && pwd)/target/release/conversor-stickers"
+    # La carpeta de compilación puede estar fuera del proyecto (target-dir en ~/.cargo/config.toml).
+    target_dir="$(cd "$conversor_dir" && cargo metadata --format-version 1 --no-deps \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).target_directory))')"
+    conversor_bin="$target_dir/release/conversor-stickers"
     echo "Conversor listo: $conversor_bin"
   else
     echo "Aviso: existe $conversor_dir pero falta cargo; se omite el conversor (se usará ffmpeg)."
@@ -101,4 +104,4 @@ if [[ -n "$conversor_bin" ]] && ! grep -q '^CONVERSOR_BIN=' .env; then
 fi
 
 echo
-echo "Listo. Ejecuta 'npm start' para vincular la cuenta (primer inicio)."
+echo "Listo. Ejecuta 'npm start' y solicita la vinculación desde la app o la API (ver README, «Vinculación»)."

@@ -2,30 +2,31 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import makeWASocket, {
-  Browsers,
-  DisconnectReason,
+import {
   downloadMediaMessage,
+  generateMessageIDV2,
+  jidNormalizedUser,
   normalizeMessageContent,
   prepareWAMessageMedia,
   proto,
-  useMultiFileAuthState,
+  type AnyMessageContent,
+  type Contact,
+  type MediaGenerationOptions,
+  type MiscMessageGenerationOptions,
+  type WAMediaUploadFunction,
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
 import { isHelpRequest, parseSettings } from "./ajustes.js";
 import { isAllowedJid, phoneFromJid } from "./allowlist.js";
 import type { Config } from "./config.js";
-import { JobGate } from "./job-gate.js";
+import type { JobGate, Notice } from "./job-gate.js";
 import { writeInput, buildSoundSticker, StickerTooLargeError } from "./process-video.js";
 import { FfmpegError } from "./ffmpeg.js";
-import { logger as rootLogger, type Logger } from "./logger.js";
-import { MSG_LINKED, printPairingCode, printQr } from "./vinculacion.js";
-import { AudioStickerRegistry, installSoundStickerPatch } from "./sound-sticker.js";
+import type { Logger } from "./logger.js";
+import type { AudioStickerRegistry } from "./sound-sticker.js";
 
 const MAX_INPUT_BYTES = 25 * 1024 * 1024;
-const PAIRING_CODE_DELAY_MS = 3_000;
-const RECONNECT_DELAY_MS = 5_000;
 
 const MSG_HELP =
   "Envíame un video corto (o un video enviado como documento) y te devuelvo un sticker con sonido. " +
@@ -108,128 +109,118 @@ function allowedPhoneFor(message: WAMessage, config: Config): string | undefined
   return undefined;
 }
 
-export interface BotDeps {
+/** Normal mode: private chats from the allowlist, never our own messages. */
+function isFromAllowedChat(message: WAMessage, config: Config, log: Logger): boolean {
+  if (message.key.fromMe) {
+    return false;
+  }
+  const chat = message.key.remoteJid ?? "";
+  if (chat.endsWith("@g.us") || chat.endsWith("@broadcast") || chat.endsWith("@newsletter")) {
+    log.debug("Mensaje de grupo, difusión o canal; ignorado.");
+    return false;
+  }
+  if (allowedPhoneFor(message, config) === undefined) {
+    // Not on the allowlist: the bot stays silent so it does not reveal itself to strangers.
+    log.debug("Mensaje de un remitente fuera de la lista; ignorado.");
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Baileys uploads media inside sendMessage and cannot be cancelled; failing right after the upload
+ * keeps a job that was paused meanwhile from being sent.
+ */
+export function uploadUnlessPaused(sock: WASocket, signal: AbortSignal): WAMediaUploadFunction {
+  return async (...args) => {
+    const uploaded = await sock.waUploadToServer(...args);
+    signal.throwIfAborted();
+    return uploaded;
+  };
+}
+
+/**
+ * True for a video the account sent to its own chat. `remoteJid` is the chat (the recipient);
+ * `remoteJidAlt` is deliberately not trusted: on our own messages to a contact it may hold the
+ * sender's alternate address, which is ours.
+ */
+export function isOwnChatVideo(
+  me: Contact | undefined,
+  message: WAMessage,
+  sentIds: ReadonlySet<string>,
+): boolean {
+  const { fromMe, id, remoteJid } = message.key;
+  if (!fromMe || !remoteJid || (id && sentIds.has(id))) {
+    return false;
+  }
+  // Own ids carry a device suffix ("number:12@..."), chat ids do not.
+  const isOwnChat = [me?.id, me?.lid].some((own) => own && jidNormalizedUser(own) === remoteJid);
+  return isOwnChat && findVideo(message) !== undefined;
+}
+
+export interface BotContext {
   readonly config: Config;
-  readonly logger?: Logger;
+  readonly registry: AudioStickerRegistry;
+  readonly gate: JobGate;
+  /** Ids of the messages the bot sends, so it never reacts to them. */
+  readonly sentIds: Set<string>;
+  readonly log: Logger;
 }
 
-/** Starts the bot and keeps it connected until the session is logged out. */
-export async function startBot(deps: BotDeps): Promise<void> {
-  const log = deps.logger ?? rootLogger;
-  const registry = new AudioStickerRegistry();
-  installSoundStickerPatch(deps.config.wireFormat, registry);
-  const gate = new JobGate();
+/** Sends a message to the chat unless the bot has been paused. */
+type Reply = (content: AnyMessageContent, quote?: "quoted") => Promise<void>;
 
-  for (;;) {
-    const outcome = await connectOnce(deps, registry, gate, log);
-    if (outcome === "logged-out") {
-      log.error("La sesión se cerró en WhatsApp. Borra AUTH_DIR y vuelve a vincular el dispositivo.");
-      return;
-    }
-    log.warn("Conexión perdida. Reintentando…");
-    await delay(RECONNECT_DELAY_MS);
-  }
-}
-
-async function connectOnce(
-  deps: BotDeps,
-  registry: AudioStickerRegistry,
-  gate: JobGate,
-  log: Logger,
-): Promise<"logged-out" | "closed"> {
-  const { state, saveCreds } = await useMultiFileAuthState(deps.config.authDir);
-
-  const sock = makeWASocket({
-    auth: state,
-    browser: Browsers.ubuntu("Chrome"),
-    logger: log.child({ module: "baileys" }, { level: "warn" }),
-    markOnlineOnConnect: false,
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  if (!state.creds.registered && deps.config.pairingPhone) {
-    const phone = deps.config.pairingPhone;
-    setTimeout(() => {
-      sock
-        .requestPairingCode(phone)
-        .then((code) => {
-          printPairingCode(code);
-          log.info("Código de vinculación mostrado en la terminal.");
-        })
-        .catch((error: unknown) => {
-          log.error({ err: error }, "No pude pedir el código de vinculación.");
-        });
-    }, PAIRING_CODE_DELAY_MS);
-  }
-
-  return new Promise((resolve) => {
-    sock.ev.on("connection.update", (update) => {
-      if (update.qr && !state.creds.registered && deps.config.pairingPhone === undefined) {
-        printQr(update.qr);
-      }
-      if (update.isNewLogin) {
-        process.stdout.write(`\n${MSG_LINKED}\n`);
-      }
-      if (update.connection === "open") {
-        log.info("Conectado a WhatsApp.");
-      }
-      if (update.connection === "close") {
-        const code = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output
-          ?.statusCode;
-        resolve(code === DisconnectReason.loggedOut ? "logged-out" : "closed");
-      }
-    });
-
-    sock.ev.on("messages.upsert", ({ messages, type }) => {
-      if (type !== "notify") {
-        log.debug({ type, count: messages.length }, "Mensajes que no son notificación nueva; ignorados.");
-        return;
-      }
-      for (const message of messages) {
-        handleMessage(sock, message, deps.config, registry, gate, log).catch((error: unknown) => {
-          log.error({ err: error }, "Error inesperado al procesar un mensaje.");
-        });
-      }
-    });
-  });
-}
-
+/**
+ * Answers one message. `signal` aborts on a manual pause or a disconnection: from then on nothing
+ * is sent.
+ */
 export async function handleMessage(
   sock: WASocket,
   message: WAMessage,
-  config: Config,
-  registry: AudioStickerRegistry,
-  gate: JobGate,
-  log: Logger,
+  context: BotContext,
+  signal: AbortSignal,
 ): Promise<void> {
+  const { config, registry, gate, sentIds, log } = context;
   log.debug(
     {
-      remoteJid: message.key.remoteJid,
-      remoteJidAlt: message.key.remoteJidAlt,
       fromMe: message.key.fromMe,
       stubType: message.messageStubType,
       contentKeys: Object.keys(message.message ?? {}),
     },
     "Mensaje recibido.",
   );
-  if (message.key.fromMe) {
+  if (signal.aborted) {
     return;
   }
+  if (config.ownChatMode) {
+    if (!isOwnChatVideo(sock.user, message, sentIds)) {
+      return;
+    }
+  } else if (!isFromAllowedChat(message, config, log)) {
+    return;
+  }
+
   const chat = message.key.remoteJid ?? "";
-  if (chat.endsWith("@g.us") || chat.endsWith("@broadcast") || chat.endsWith("@newsletter")) {
-    log.debug("Mensaje de grupo, difusión o canal; ignorado.");
-    return;
-  }
-
-  const phone = allowedPhoneFor(message, config);
-  if (phone === undefined) {
-    // Not on the allowlist: the bot stays silent so it does not reveal itself to strangers.
-    log.debug("Mensaje de un remitente fuera de la lista; ignorado.");
-    return;
-  }
-
   const sender = senderOf(message);
+  const reply: Reply = async (content, quote) => {
+    if (signal.aborted) {
+      return;
+    }
+    const messageId = generateMessageIDV2(sock.user?.id);
+    sentIds.add(messageId);
+    // sendMessage passes `upload` on to the media generation, although its type does not list it.
+    const options: MiscMessageGenerationOptions & Pick<MediaGenerationOptions, "upload"> = {
+      messageId,
+      upload: uploadUnlessPaused(sock, signal),
+      ...(quote && { quoted: message }),
+    };
+    await sock.sendMessage(chat, content, options);
+  };
+  const replyNotice = async (notice: Notice, text: string, quote?: "quoted"): Promise<void> => {
+    if (gate.tryNotice(sender, notice)) {
+      await reply({ text }, quote);
+    }
+  };
   const video = findVideo(message);
   if (!video) {
     const content = normalizeMessageContent(message.message);
@@ -239,42 +230,50 @@ export async function handleMessage(
       return;
     }
     const askedForHelp = isHelpRequest(content.conversation ?? content.extendedTextMessage?.text);
-    await sock.sendMessage(chat, { text: content.conversation && !askedForHelp ? MSG_NOT_VIDEO : MSG_HELP });
+    if (content.conversation && !askedForHelp) {
+      await replyNotice("no-es-video", MSG_NOT_VIDEO);
+    } else {
+      await replyNotice("ayuda", MSG_HELP);
+    }
     return;
   }
 
   const parsed = parseSettings(video.caption, config.maxSoundSeconds);
   if (!parsed.ok) {
-    const text = `${parsed.errors.join("\n")}\nEscribe «ayuda» para ver el formato.`;
-    await sock.sendMessage(chat, { text }, { quoted: message });
+    const hint = config.ownChatMode ? [] : ["Escribe «ayuda» para ver el formato."];
+    await replyNotice("ajustes", [...parsed.errors, ...hint].join("\n"), "quoted");
     return;
   }
 
   const decision = gate.tryStart(sender);
   if (decision === "busy") {
-    await sock.sendMessage(chat, { text: MSG_BUSY }, { quoted: message });
+    await replyNotice("ocupado", MSG_BUSY, "quoted");
     return;
   }
   if (decision === "rate-limited") {
-    await sock.sendMessage(chat, { text: MSG_RATE_LIMITED }, { quoted: message });
+    await replyNotice("limite", MSG_RATE_LIMITED, "quoted");
     return;
   }
 
   let workDir: string | undefined;
   try {
     if (video.fileLength !== undefined && video.fileLength > MAX_INPUT_BYTES) {
-      await sock.sendMessage(chat, { text: MSG_TOO_LARGE }, { quoted: message });
+      await reply({ text: MSG_TOO_LARGE }, "quoted");
       return;
     }
-    await sock.sendMessage(chat, { text: MSG_PROCESSING }, { quoted: message });
+    if (!config.ownChatMode) {
+      await reply({ text: MSG_PROCESSING }, "quoted");
+    }
+    signal.throwIfAborted();
 
     workDir = await mkdtemp(join(tmpdir(), "sound-sticker-"));
     const data = await downloadMediaMessage(message, "buffer", {}, {
       logger: log.child({ module: "media" }, { level: "warn" }),
       reuploadRequest: sock.updateMediaMessage,
     });
+    signal.throwIfAborted();
     if (data.length > MAX_INPUT_BYTES) {
-      await sock.sendMessage(chat, { text: MSG_TOO_LARGE }, { quoted: message });
+      await reply({ text: MSG_TOO_LARGE }, "quoted");
       return;
     }
     const inputPath = await writeInput(workDir, data);
@@ -284,21 +283,27 @@ export async function handleMessage(
       "Sticker con sonido generado.",
     );
 
+    signal.throwIfAborted();
+
     if (files.ogg === undefined) {
-      await sock.sendMessage(chat, { sticker: files.webp, isAnimated: true }, { quoted: message });
-      await sock.sendMessage(chat, { text: MSG_NO_AUDIO }, { quoted: message });
+      await reply({ sticker: files.webp, isAnimated: true }, "quoted");
+      await reply({ text: MSG_NO_AUDIO }, "quoted");
       return;
     }
-    await sendSoundSticker(sock, chat, message, files.webp, files.ogg, registry, log);
+    await sendSoundSticker(sock, reply, files.webp, files.ogg, registry, log, signal);
     const aviso = imageShorterMessage(files.videoSeconds, files.audioSeconds);
     if (aviso !== undefined) {
-      await sock.sendMessage(chat, { text: aviso }, { quoted: message });
+      await reply({ text: aviso }, "quoted");
     }
   } catch (error) {
+    if (signal.aborted) {
+      log.info("El bot se pausó: descarto el trabajo en curso.");
+      return;
+    }
     const text =
       error instanceof StickerTooLargeError || error instanceof FfmpegError ? error.message : MSG_FAILED;
     log.warn({ err: error }, "No se pudo generar el sticker.");
-    await sock.sendMessage(chat, { text }, { quoted: message });
+    await reply({ text }, "quoted");
   } finally {
     gate.finish(sender);
     if (workDir) {
@@ -309,18 +314,18 @@ export async function handleMessage(
 
 async function sendSoundSticker(
   sock: WASocket,
-  chat: string,
-  quoted: WAMessage,
+  reply: Reply,
   webp: Buffer,
   ogg: Buffer,
   registry: AudioStickerRegistry,
   log: Logger,
+  signal: AbortSignal,
 ): Promise<void> {
   const stickerSha = sha256(webp);
   try {
     const prepared = await prepareWAMessageMedia(
       { audio: ogg, ptt: true, mimetype: "audio/ogg; codecs=opus" },
-      { upload: sock.waUploadToServer, logger: log.child({ module: "media" }, { level: "warn" }) },
+      { upload: uploadUnlessPaused(sock, signal), logger: log.child({ module: "media" }, { level: "warn" }) },
     );
     if (!prepared.audioMessage) {
       throw new Error("prepareWAMessageMedia no devolvió audioMessage");
@@ -329,18 +334,15 @@ async function sendSoundSticker(
 
     registry.attach(stickerSha, audioBytes);
     try {
-      await sock.sendMessage(chat, { sticker: webp, isAnimated: true }, { quoted });
+      await reply({ sticker: webp, isAnimated: true }, "quoted");
     } finally {
       registry.detach(stickerSha);
     }
     log.info("Sticker con sonido enviado.");
   } catch (error) {
+    signal.throwIfAborted();
     log.warn({ err: error }, "Fallo al enviar el sticker con sonido; envío el animado sin audio.");
-    await sock.sendMessage(chat, { sticker: webp, isAnimated: true }, { quoted });
-    await sock.sendMessage(chat, { text: MSG_FALLBACK }, { quoted });
+    await reply({ sticker: webp, isAnimated: true }, "quoted");
+    await reply({ text: MSG_FALLBACK }, "quoted");
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

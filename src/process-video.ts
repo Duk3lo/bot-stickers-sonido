@@ -12,7 +12,7 @@ import {
   STICKER_MAX_SECONDS,
   FfmpegError,
 } from "./ffmpeg.js";
-import type { Settings } from "./ajustes.js";
+import type { Crop, Settings } from "./ajustes.js";
 
 const FFPROBE_TIMEOUT_MS = 15_000;
 const FFMPEG_TIMEOUT_MS = 90_000;
@@ -97,8 +97,9 @@ export async function buildSoundSticker(
   for (const imageSeconds of imageSecondsAttempts(firstPlan.videoSeconds)) {
     const attempt = planClip(duration, maxSoundSeconds, settings, imageSeconds);
     try {
-      if (conversorBin === undefined) {
-        await makeWebpWithFfmpeg(inputPath, webpPath, start, end, attempt.videoSeconds);
+      // The conversor binary is not told about the crop, so a cropped sticker is made with ffmpeg.
+      if (conversorBin === undefined || settings.crop !== undefined) {
+        await makeWebpWithFfmpeg(inputPath, webpPath, start, end, attempt.videoSeconds, settings.crop);
       } else {
         await makeWebpWithConversor(conversorBin, inputPath, webpPath, start, attempt.videoSeconds);
       }
@@ -147,10 +148,11 @@ async function makeWebpWithFfmpeg(
   start: number,
   end: number,
   seconds: number,
+  crop: Crop | undefined,
 ): Promise<void> {
   for (const attempt of STICKER_ATTEMPTS) {
     await runBinary(
-      buildVideoStickerArgs({ input, output, seconds, start, end, fps: attempt.fps, quality: attempt.quality }),
+      buildVideoStickerArgs({ input, output, seconds, start, end, fps: attempt.fps, quality: attempt.quality, ...(crop && { crop }) }),
       { timeoutMs: FFMPEG_TIMEOUT_MS },
     );
     const { size } = await stat(output);
