@@ -15,7 +15,7 @@ const config: Config = {
   wireFormat: "sticker-field-26",
   conversorBin: undefined,
   controlPort: 8787,
-  controlTokenFile: "./control-token",
+  listenOnNetwork: true,
   ownChatMode: false,
 };
 

@@ -88,7 +88,7 @@ Con el modo encendido:
 
 ## API de control
 
-Escucha solo en `127.0.0.1:CONTROL_PORT` (8787). Cada petición necesita `Authorization: Bearer <token>`.
+Escucha en `0.0.0.0:CONTROL_PORT` (8787) salvo con `ESCUCHAR_EN_RED=no`, que la deja solo en `127.0.0.1`. Solo atiende conexiones cuyo origen sea local, de red privada (10/8, 172.16/12, 192.168/16) o de Tailscale (100.64/10); las demás se cortan sin respuesta. Cada petición necesita `Authorization: Bearer <token>`.
 
 | Petición | Qué hace |
 | --- | --- |
@@ -98,17 +98,18 @@ Escucha solo en `127.0.0.1:CONTROL_PORT` (8787). Cada petición necesita `Author
 | `POST /vinculacion` | Cuerpo `{"metodo":"codigo"}` o `{"metodo":"qr"}`. Con código admite `"numero"`, que manda sobre `PAIRING_PHONE`. |
 | `DELETE /vinculacion` | Desvincula. 409 si no está vinculado y conectado. |
 
-Además: solo admite el `Host` `127.0.0.1`, `localhost` o `*.ts.net`; rechaza las peticiones con `Origin` (navegadores) y los cuerpos de más de 1 KiB; tras 10 tokens erróneos en un minuto, las peticiones con token erróneo reciben 429 hasta que pase la ventana. Las que llevan el token correcto se atienden siempre, para que nada te impida pausar el bot.
+Además: solo admite el `Host` `127.0.0.1`, `localhost`, `*.ts.net` o una IPv4 privada con su puerto; rechaza las peticiones con `Origin` (navegadores) y los cuerpos de más de 1 KiB; tras 10 tokens erróneos en un minuto, las peticiones con token erróneo reciben 429 hasta que pase la ventana. Las que llevan el token correcto se atienden siempre, para que nada te impida pausar el bot.
 
 El bot abre el puerto antes de leer la sesión: si ya está ocupado (por ejemplo, por otra instancia), termina sin tocar `AUTH_DIR`.
 
 ### Ver el token
 
-El token se crea en el primer arranque en `CONTROL_TOKEN_FILE` (`./control-token`, permisos 0600). Míralo solo en tu propia terminal, sin pegarlo en chats ni capturas. Desde la carpeta del bot, en fish:
+El token se crea en el primer arranque en `$XDG_CONFIG_HOME/bot-stickers-sonido/control-token` (o `~/.config/bot-stickers-sonido/control-token`), con la carpeta en 0700 y el archivo en 0600; `CONTROL_TOKEN_FILE` cambia la ruta. Si existe un `./control-token` de versiones anteriores y el nuevo no, se mueve al nuevo para que el token no cambie. Junto al token se escribe `conexion.json` (`{"version":1,"puerto":8787}`, 0600), con el que la app de escritorio de la misma PC sabe el puerto. Míralo solo en tu propia terminal, sin pegarlo en chats ni capturas. En fish:
 
 ```fish
-cat control-token                 # para copiarlo en la app
-set token (cat control-token)     # para los ejemplos con curl
+set carpeta (test -n "$XDG_CONFIG_HOME"; and echo $XDG_CONFIG_HOME; or echo ~/.config)/bot-stickers-sonido
+cat $carpeta/control-token                 # para copiarlo en la app
+set token (cat $carpeta/control-token)     # para los ejemplos con curl
 curl -H "Authorization: Bearer $token" http://127.0.0.1:8787/estado
 ```
 
@@ -122,11 +123,11 @@ Al arrancar en una terminal interactiva (nunca como servicio ni en el log), el b
 conversorstickers://bot#u=<direccion codificada>&t=<token>
 ```
 
-La dirección es `https://<nombre>.ts.net` si Tailscale está instalado y con sesión (entonces hace falta `tailscale serve --bg <puerto>`, ver abajo); si no, `http://127.0.0.1:<CONTROL_PORT>`. El token va en el fragmento (`#`), que no se envía a ningún servidor. **El enlace da control total del bot: no lo compartas.**
+La dirección preferida es `http://<IPv4 privada de la PC>:<CONTROL_PORT>`, para conectar desde el celular en la misma Wi-Fi sin instalar nada más. Si hay varias interfaces se da el enlace y el QR de la primera (Wi-Fi y Ethernet primero; se ignoran docker, veth y br-) y las demás como texto. Después viene Tailscale (`https://<nombre>.ts.net`, ver abajo) y, si no hay nada más, `http://127.0.0.1:<CONTROL_PORT>`. El celular debe estar en la misma Wi-Fi; si no conecta, quizá haga falta abrir el puerto en el cortafuegos, solo para tu red local (el bot imprime el comando con tu red), por ejemplo: `sudo ufw allow from 192.168.1.0/24 to any port 8787 proto tcp`. El token va en el fragmento (`#`), que no se envía a ningún servidor. **El enlace da control total del bot: no lo compartas.**
 
-### Acceso desde el celular con Tailscale
+### Acceso desde el celular con Tailscale (opcional)
 
-Con [Tailscale](https://tailscale.com) instalado y la sesión iniciada en el equipo del bot y en el celular:
+Si no estás en la misma Wi-Fi, con [Tailscale](https://tailscale.com) instalado y la sesión iniciada en el equipo del bot y en el celular:
 
 ```fish
 tailscale serve --bg 8787
@@ -181,8 +182,9 @@ Sin pie, se usa el vídeo entero. Si hay una clave desconocida o un valor no vá
 | `MAX_SOUND_SECONDS` | Duración máxima del audio, entero entre 1 y 60 (por defecto 10). Más de 10 s es experimental: se desconoce el límite real de WhatsApp. |
 | `AUTH_DIR` | Carpeta de la sesión (por defecto `./auth`). |
 | `PAIRING_PHONE` | Opcional. Número para vincular con código cuando la petición no lo trae. |
-| `CONTROL_PORT` | Puerto de la API de control en `127.0.0.1` (por defecto 8787). |
-| `CONTROL_TOKEN_FILE` | Archivo del token de la API (por defecto `./control-token`). Si cambias la ruta, déjalo fuera del repositorio. |
+| `CONTROL_PORT` | Puerto de la API de control (por defecto 8787). |
+| `ESCUCHAR_EN_RED` | `si` (por defecto) escucha también en la red local, solo para orígenes locales, privados o de Tailscale; `no` deja la API solo en `127.0.0.1`. |
+| `CONTROL_TOKEN_FILE` | Archivo del token de la API (por defecto `~/.config/bot-stickers-sonido/control-token`, o bajo `$XDG_CONFIG_HOME`). Si cambias la ruta, déjalo fuera del repositorio. |
 | `MODO_CHAT_PROPIO` | `si` o `no` (por defecto). Ver [Modo de chat propio](#modo-de-chat-propio). |
 | `SOUND_WIRE_FORMAT` | `sticker-field-26` (por defecto) o `audio-sticker-134`. |
 | `CONVERSOR_BIN` | Opcional. Ruta absoluta al binario `conversor-stickers`; si se define, genera el WebP (más rápido y con mejor ajuste de peso). Si no, se usa ffmpeg. |

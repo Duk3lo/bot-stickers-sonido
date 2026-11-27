@@ -52,12 +52,10 @@ test("los errores de configuración no repiten los valores recibidos", () => {
   );
 });
 
-test("CONTROL_PORT y CONTROL_TOKEN_FILE tienen valores por defecto y se validan", () => {
+test("CONTROL_PORT tiene valor por defecto y se valida", () => {
   assert.equal(loadConfig(VALID).controlPort, 8787);
-  assert.equal(loadConfig(VALID).controlTokenFile, "./control-token");
-  const custom = loadConfig({ ...VALID, CONTROL_PORT: "9000", CONTROL_TOKEN_FILE: "/run/bot/token" });
+  const custom = loadConfig({ ...VALID, CONTROL_PORT: "9000" });
   assert.equal(custom.controlPort, 9000);
-  assert.equal(custom.controlTokenFile, "/run/bot/token");
   for (const bad of ["0", "65536", "80.5", "ochenta"]) {
     assert.throws(() => loadConfig({ ...VALID, CONTROL_PORT: bad }), ConfigError, bad);
   }
@@ -145,4 +143,11 @@ test("MODO_CHAT_PROPIO está apagado por defecto y solo se enciende con «si»",
 
 test("en modo de chat propio ALLOWED_NUMBERS es opcional", () => {
   assert.equal(loadConfig({ ...ACCEPTED, MODO_CHAT_PROPIO: "si" }).allowedNumbers.size, 0);
+});
+
+test("ESCUCHAR_EN_RED es «si» por defecto y solo admite si o no", () => {
+  assert.equal(loadConfig(VALID).listenOnNetwork, true);
+  assert.equal(loadConfig({ ...VALID, ESCUCHAR_EN_RED: "si" }).listenOnNetwork, true);
+  assert.equal(loadConfig({ ...VALID, ESCUCHAR_EN_RED: "no" }).listenOnNetwork, false);
+  assert.throws(() => loadConfig({ ...VALID, ESCUCHAR_EN_RED: "quizá" }), ConfigError);
 });

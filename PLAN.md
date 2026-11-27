@@ -73,4 +73,9 @@ Contrato y reglas completas en la sección T4 de `PLAN.md` del repo conversor-st
   `PAIRING_PHONE`. Pruebas en control-api y whatsapp-session. README.
 - [x] H3. Enlace de conexión `conversorstickers://bot#u=…&t=…` y su QR al arrancar en terminal
   interactiva (Tailscale si hay, si no 127.0.0.1). Pruebas en enlace-conexion y logger. README.
+- [x] H4. Conexión en la misma Wi-Fi sin Tailscale: `ESCUCHAR_EN_RED=si|no` (por defecto si, 0.0.0.0) con filtro
+  de origen (loopback, privadas, Tailscale) y de `Host` (IPv4 privada con puerto); token en
+  `~/.config/bot-stickers-sonido/` (0700/0600, migra el `./control-token` antiguo) con `conexion.json`;
+  el enlace prefiere la IPv4 privada de la PC (primera con QR, otras en texto) y avisa del cortafuegos (`ufw`).
+  Pruebas en red-local, control-token, control-api, config y enlace-conexion.
 - [ ] H2. App (conversor-stickers): campo para el número y QR visible también en Android.

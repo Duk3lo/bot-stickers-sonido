@@ -105,10 +105,10 @@ test("tras 10 fallos en un minuto los fallos responden 429, pero el token correc
 
 test("solo admite Host local o de Tailscale", async (t) => {
   const { send } = await setUp(t);
-  for (const host of ["127.0.0.1:8787", "localhost", "equipo.cola-pez.ts.net", "equipo.cola-pez.ts.net:443"]) {
+  for (const host of ["127.0.0.1:8787", "localhost", "equipo.cola-pez.ts.net", "equipo.cola-pez.ts.net:443", "192.168.1.2:8787"]) {
     assert.equal((await send("GET", "/estado", { headers: { host } })).status, 200, host);
   }
-  for (const host of ["evil.com", "ts.net", "equipo.ts.net.evil.com", "127.0.0.1.evil.com", "192.168.1.2"]) {
+  for (const host of ["evil.com", "ts.net", "equipo.ts.net.evil.com", "127.0.0.1.evil.com", "192.168.1.2", "8.8.8.8:8787"]) {
     assertError(await send("GET", "/estado", { headers: { host } }), 403);
   }
 });
@@ -204,6 +204,7 @@ test("con el puerto ocupado falla sin llegar a leer la sesión", async (t) => {
       token: TOKEN,
       log: SILENT,
       port: (other.address() as AddressInfo).port,
+      listenOnNetwork: false,
       restore: async () => {
         restored = true;
       },
@@ -224,6 +225,7 @@ test("no atiende peticiones hasta que se haya leído la sesión", async (t) => {
     token: TOKEN,
     log: SILENT,
     port,
+    listenOnNetwork: false,
     restore: () => {
       restoring();
       return new Promise<void>((resolve) => (finishRestore = resolve));
@@ -241,4 +243,38 @@ test("no atiende peticiones hasta que se haya leído la sesión", async (t) => {
   });
   assert.equal((await reply).status, 200);
   assert.deepEqual(events, ["restored", "served"]);
+});
+
+test("corta sin respuesta las conexiones de un origen no permitido", async (t) => {
+  const server = createControlServer({
+    session: fakeSession(),
+    token: TOKEN,
+    log: SILENT,
+    originAllowed: () => false,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const { port } = server.address() as AddressInfo;
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/estado`, { headers: { authorization: `Bearer ${TOKEN}` } }));
+});
+
+test("con listenOnNetwork escucha en todas las interfaces y sin él solo en loopback", async (t) => {
+  for (const [listenOnNetwork, address] of [[true, "0.0.0.0"], [false, "127.0.0.1"]] as const) {
+    const server = await startControlServer({
+      session: fakeSession(),
+      token: TOKEN,
+      log: SILENT,
+      port: await freePort(),
+      listenOnNetwork,
+      restore: async () => {},
+    });
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    assert.equal((server.address() as AddressInfo).address, address);
+  }
 });

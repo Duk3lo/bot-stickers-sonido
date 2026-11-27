@@ -3,7 +3,7 @@ import { clearAuthFiles, loadAuthState } from "./auth-files.js";
 import { handleMessage, isOwnChatVideo, type BotContext } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { startControlServer } from "./control-api.js";
-import { loadOrCreateControlToken } from "./control-token.js";
+import { setUpControlToken } from "./control-token.js";
 import { printConnectionLink } from "./enlace-conexion.js";
 import { JobGate } from "./job-gate.js";
 import { captureConsole, logger } from "./logger.js";
@@ -55,21 +55,32 @@ async function main(): Promise<void> {
     },
     log: logger,
   });
-  const token = await loadOrCreateControlToken(config.controlTokenFile);
+  const token = await setUpControlToken({ env: process.env, port: config.controlPort });
   await startControlServer({
     session,
     token,
     log: logger,
     port: config.controlPort,
+    listenOnNetwork: config.listenOnNetwork,
     restore: () => session.restore(),
   });
-  logger.info({ port: config.controlPort }, "API de control escuchando solo en 127.0.0.1. El bot está en pausa.");
+  logger.info(
+    { port: config.controlPort, listenOnNetwork: config.listenOnNetwork },
+    config.listenOnNetwork
+      ? "API de control escuchando en la red local (solo se atienden orígenes locales, privados o de Tailscale). El bot está en pausa."
+      : "API de control escuchando solo en 127.0.0.1. El bot está en pausa.",
+  );
   if (session.status().vinculacion === "sin-vincular") {
     logger.info("El bot no está vinculado: solicita la vinculación desde la app o la API (ver README).");
   }
 
   if (interactive) {
-    await printConnectionLink({ token, port: config.controlPort, log: logger });
+    await printConnectionLink({
+      token,
+      port: config.controlPort,
+      listenOnNetwork: config.listenOnNetwork,
+      log: logger,
+    });
   }
 
   session.resume();

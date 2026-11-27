@@ -13,9 +13,9 @@ export interface Config {
   readonly wireFormat: WireFormat;
   /** Path to the conversor-stickers binary; when absent the WebP is made with ffmpeg. */
   readonly conversorBin: string | undefined;
-  /** Port of the control API, which only listens on 127.0.0.1. */
   readonly controlPort: number;
-  readonly controlTokenFile: string;
+  /** Listen on the local network too (only loopback, private and Tailscale origins are served). */
+  readonly listenOnNetwork: boolean;
   /** Only videos sent to the linked account's chat with itself are processed, one per activation. */
   readonly ownChatMode: boolean;
 }
@@ -34,7 +34,6 @@ const DEFAULT_MAX_SOUND_SECONDS = 10;
 const DEFAULT_AUTH_DIR = "./auth";
 const DEFAULT_WIRE_FORMAT: WireFormat = "sticker-field-26";
 const DEFAULT_CONTROL_PORT = 8787;
-const DEFAULT_CONTROL_TOKEN_FILE = "./control-token";
 
 /** Keeps only the digits of a phone number, so "+34 600-111-222" becomes "34600111222". */
 export function normalizePhone(raw: string): string {
@@ -124,6 +123,15 @@ function parseOwnChatMode(raw: string | undefined, problems: string[]): boolean 
   return value === "si";
 }
 
+/** Defaults to «si»; a typo must not silently expose or hide the API, so unknown values are rejected. */
+function parseListenOnNetwork(raw: string | undefined, problems: string[]): boolean {
+  const value = raw?.trim() ?? "";
+  if (value !== "" && value !== "si" && value !== "no") {
+    problems.push("ESCUCHAR_EN_RED debe ser «si» o «no».");
+  }
+  return value !== "no";
+}
+
 /**
  * Reads and validates the configuration from environment variables.
  * Collects every problem and throws a single ConfigError listing them all.
@@ -146,7 +154,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const controlPort = parseControlPort(env["CONTROL_PORT"], problems);
 
   const authDir = env["AUTH_DIR"]?.trim() || DEFAULT_AUTH_DIR;
-  const controlTokenFile = env["CONTROL_TOKEN_FILE"]?.trim() || DEFAULT_CONTROL_TOKEN_FILE;
+  const listenOnNetwork = parseListenOnNetwork(env["ESCUCHAR_EN_RED"], problems);
 
   const rawPairing = env["PAIRING_PHONE"]?.trim();
   let pairingPhone: string | undefined;
@@ -171,7 +179,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     wireFormat,
     conversorBin,
     controlPort,
-    controlTokenFile,
+    listenOnNetwork,
     ownChatMode,
   };
 }

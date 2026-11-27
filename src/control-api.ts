@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { normalizePhone, PHONE_PATTERN } from "./config.js";
 import type { Logger } from "./logger.js";
+import { isAllowedHost, isAllowedOrigin } from "./red-local.js";
 import {
   LinkingUnavailableError,
   StateConflictError,
@@ -10,13 +11,12 @@ import {
   type WhatsAppSession,
 } from "./whatsapp-session.js";
 
-const CONTROL_HOST = "127.0.0.1";
+const LOCAL_HOST = "127.0.0.1";
+const NETWORK_HOST = "0.0.0.0";
 const MAX_BODY_BYTES = 1024;
 const MAX_FAILED_LOGINS = 10;
 const FAILED_LOGIN_WINDOW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
-/** Local names, or the one `tailscale serve` forwards. Anything else suggests DNS rebinding. */
-const ALLOWED_HOST = /^(127\.0\.0\.1|localhost|([a-z0-9-]+\.)+ts\.net)(:\d{1,5})?$/i;
 
 export type SessionControl = Pick<WhatsAppSession, "status" | "activate" | "pause" | "startLinking" | "unlink">;
 
@@ -26,10 +26,14 @@ export interface ControlServerDeps {
   readonly log: Logger;
   /** Authorized requests wait for this before touching the session. */
   readonly ready?: Promise<void>;
+  /** Decides by `socket.remoteAddress`; connections it refuses are cut without a reply. */
+  readonly originAllowed?: (remoteAddress: string | undefined) => boolean;
 }
 
 export interface ControlServerStart extends Omit<ControlServerDeps, "ready"> {
   readonly port: number;
+  /** Listen on every interface (the origin filter still applies) instead of only on 127.0.0.1. */
+  readonly listenOnNetwork: boolean;
   /** Reads the stored session. Runs only once the port is ours. */
   restore(): Promise<void>;
 }
@@ -37,11 +41,11 @@ export interface ControlServerStart extends Omit<ControlServerDeps, "ready"> {
 /**
  * Takes the port before reading the session: a second instance fails here without touching AUTH_DIR.
  */
-export async function startControlServer({ port, restore, ...deps }: ControlServerStart): Promise<Server> {
+export async function startControlServer({ port, listenOnNetwork, restore, ...deps }: ControlServerStart): Promise<Server> {
   let markReady = (): void => {};
   const ready = new Promise<void>((resolve) => (markReady = resolve));
   const server = createControlServer({ ...deps, ready });
-  server.listen(port, CONTROL_HOST);
+  server.listen(port, listenOnNetwork ? NETWORK_HOST : LOCAL_HOST);
   await once(server, "listening");
   try {
     await restore();
@@ -74,12 +78,18 @@ function digest(text: string): Buffer {
 }
 
 /** HTTP control API, without listening yet. */
-export function createControlServer({ session, token, log, ready }: ControlServerDeps): Server {
+export function createControlServer({
+  session,
+  token,
+  log,
+  ready,
+  originAllowed = isAllowedOrigin,
+}: ControlServerDeps): Server {
   const expected = digest(`Bearer ${token}`);
   let failedLogins: number[] = [];
 
   function authorize(request: IncomingMessage): void {
-    if (!ALLOWED_HOST.test(request.headers.host ?? "")) {
+    if (!isAllowedHost(request.headers.host ?? "")) {
       throw new RequestError(403, "Host no permitido.");
     }
     // Only browsers send Origin, and no web page may drive the bot.
@@ -146,6 +156,11 @@ export function createControlServer({ session, token, log, ready }: ControlServe
         });
         response.end(JSON.stringify(body));
       });
+  });
+  server.on("connection", (socket) => {
+    if (!originAllowed(socket.remoteAddress)) {
+      socket.destroy();
+    }
   });
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   server.headersTimeout = REQUEST_TIMEOUT_MS;
