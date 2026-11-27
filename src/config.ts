@@ -28,7 +28,7 @@ export class ConfigError extends Error {
   }
 }
 
-const PHONE_PATTERN = /^\d{6,15}$/;
+export const PHONE_PATTERN = /^\d{6,15}$/;
 const MAX_SOUND_SECONDS_LIMIT = 60;
 const DEFAULT_MAX_SOUND_SECONDS = 10;
 const DEFAULT_AUTH_DIR = "./auth";

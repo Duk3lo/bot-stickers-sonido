@@ -27,7 +27,7 @@ async function setUp(t: TestContext, overrides: Partial<SessionControl> = {}) {
     status: record("status"),
     activate: record("activate"),
     pause: record("pause"),
-    startLinking: (method) => record(`link:${method}`)(),
+    startLinking: (method, phone) => record(phone === undefined ? `link:${method}` : `link:${method}:${phone}`)(),
     unlink: async () => record("unlink")(),
     ...overrides,
   };
@@ -135,6 +135,16 @@ test("un método de vinculación no válido responde 422", async (t) => {
     assertError(await send("POST", "/vinculacion", { body }), 422);
   }
   assert.deepEqual(calls, []);
+});
+
+test("el número para el código llega a la sesión limpio, y uno no válido responde 422", async (t) => {
+  const { send, calls } = await setUp(t);
+  const reply = await send("POST", "/vinculacion", { body: '{"metodo":"codigo","numero":"+34 600-111-222"}' });
+  assert.equal(reply.status, 202);
+  for (const numero of ['"123"', '"34600abc222"', '""', "34600111222", "null"]) {
+    assertError(await send("POST", "/vinculacion", { body: `{"metodo":"codigo","numero":${numero}}` }), 422);
+  }
+  assert.deepEqual(calls, ["link:codigo:34600111222"]);
 });
 
 test("traduce los errores del bot a 409, 422 y 500", async (t) => {

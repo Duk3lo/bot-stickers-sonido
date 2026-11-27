@@ -322,6 +322,30 @@ test("vincular con código lo pide una sola vez y solo cuando el socket está li
   assert.deepEqual(shown, ["ABCD1234"]);
 });
 
+test("el número que llega con la petición manda sobre PAIRING_PHONE", async (t) => {
+  const { session, last } = await setUp(t, FRESH, "34600111333");
+  session.startLinking("codigo", "34600999888");
+  await settle();
+  last().update({ qr: "ref-1" });
+  await settle();
+  assert.deepEqual(last().pairingRequests, ["34600999888"]);
+});
+
+test("sin PAIRING_PHONE se vincula con el número de la petición, y cambiarlo reinicia el intento", async (t) => {
+  const { session, sockets, last } = await setUp(t, FRESH);
+  session.startLinking("codigo", "34600999888");
+  await settle();
+  session.startLinking("codigo", "34600999888");
+  await settle();
+  assert.equal(sockets.length, 1);
+  session.startLinking("codigo", "34600999777");
+  await settle();
+  assert.equal(sockets.length, 2);
+  last().update({ qr: "ref-1" });
+  await settle();
+  assert.deepEqual(last().pairingRequests, ["34600999777"]);
+});
+
 test("vincular con QR expone el último y, tras emparejar, reconecta ya", async (t) => {
   const { session, last, sockets, disk, shown } = await setUp(t, FRESH);
   session.startLinking("qr");

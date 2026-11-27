@@ -99,6 +99,8 @@ export class WhatsAppSession {
   private connection: SessionStatus["conexion"] = "desconectado";
   private linkMethod: LinkMethod = "qr";
   private pairingCodeRequested = false;
+  /** The number the current code attempt is for. */
+  private linkPhone: string | undefined;
   private code: string | null = null;
   private qr: string | null = null;
   private notice: string | null = null;
@@ -176,26 +178,29 @@ export class WhatsAppSession {
     return this.status();
   }
 
-  startLinking(method: LinkMethod): SessionStatus {
+  /** `phone` is only used to link by code; without it, the configured pairing number is used. */
+  startLinking(method: LinkMethod, phone?: string): SessionStatus {
     if (this.linking === "vinculado") {
       throw new StateConflictError("El bot ya está vinculado.");
     }
     if (this.damagedSession) {
       throw new StateConflictError(NOTICE_DAMAGED);
     }
-    if (method === "codigo" && this.deps.pairingPhone === undefined) {
+    const linkPhone = method === "codigo" ? (phone ?? this.deps.pairingPhone) : undefined;
+    if (method === "codigo" && linkPhone === undefined) {
       throw new LinkingUnavailableError(
-        "Falta PAIRING_PHONE en el .env del bot. Añádelo y reinícialo, o vincula con QR.",
+        "Falta el número: escríbelo en la app, pon PAIRING_PHONE en el .env del bot o vincula con QR.",
       );
     }
     if (this.linking === "vinculando") {
-      if (method === this.linkMethod) {
+      if (method === this.linkMethod && linkPhone === this.linkPhone) {
         return this.status();
       }
       void this.abandonLinking(null);
     }
     this.linking = "vinculando";
     this.linkMethod = method;
+    this.linkPhone = linkPhone;
     this.pairingCodeRequested = false;
     this.notice = null;
     void this.connect();
@@ -359,7 +364,7 @@ export class WhatsAppSession {
       this.deps.showQr(qr);
       return;
     }
-    const phone = this.deps.pairingPhone;
+    const phone = this.linkPhone;
     if (this.pairingCodeRequested || phone === undefined) {
       return;
     }

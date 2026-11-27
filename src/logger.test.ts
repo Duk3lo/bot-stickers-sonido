@@ -38,3 +38,10 @@ test("oculta el XML de Baileys y los nombres dentro de cadenas", () => {
   assert.match(output, /message id='a'/);
   assert.match(output, /t='1'/);
 });
+
+test("oculta el número que Baileys mete en el error de requestPairingCode", () => {
+  const lines: string[] = [];
+  const log = createLogger("info", { write: (line: string) => void lines.push(line) });
+  log.error({ err: new Error("Connection Closed para 34600111222") }, "No pude pedir el código de vinculación.");
+  assert.doesNotMatch(lines.join(""), /34600111222/);
+});

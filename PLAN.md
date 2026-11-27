@@ -67,3 +67,10 @@ Contrato y reglas completas en la sección T4 de `PLAN.md` del repo conversor-st
 - Pendiente: prueba manual con WhatsApp real.
 - [x] G6. Modo de chat propio y encuadre (`encuadre=recortar zoom= x= y=`).
 - Pendiente: probar con WhatsApp real.
+
+## Fase 4: vincular desde la app sin tocar el `.env` (pedido el 2026-11-27)
+- [x] H1. `POST /vinculacion` admite `numero` (solo con `codigo`), validado en la API; sin él se usa
+  `PAIRING_PHONE`. Pruebas en control-api y whatsapp-session. README.
+- [x] H3. Enlace de conexión `conversorstickers://bot#u=…&t=…` y su QR al arrancar en terminal
+  interactiva (Tailscale si hay, si no 127.0.0.1). Pruebas en enlace-conexion y logger. README.
+- [ ] H2. App (conversor-stickers): campo para el número y QR visible también en Android.

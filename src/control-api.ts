@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { normalizePhone, PHONE_PATTERN } from "./config.js";
 import type { Logger } from "./logger.js";
 import {
   LinkingUnavailableError,
@@ -110,8 +111,10 @@ export function createControlServer({ session, token, log, ready }: ControlServe
         return { status: 200, body: session.activate() };
       case "POST /pausar":
         return { status: 200, body: session.pause() };
-      case "POST /vinculacion":
-        return { status: 202, body: session.startLinking(parseLinkMethod(body)) };
+      case "POST /vinculacion": {
+        const { method, phone } = parseLinkRequest(body);
+        return { status: 202, body: session.startLinking(method, phone) };
+      }
       case "DELETE /vinculacion":
         return { status: 200, body: await session.unlink() };
       default:
@@ -165,7 +168,7 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function parseLinkMethod(body: string): LinkMethod {
+function parseLinkRequest(body: string): { method: LinkMethod; phone: string | undefined } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -178,5 +181,13 @@ function parseLinkMethod(body: string): LinkMethod {
   if (method !== "codigo" && method !== "qr") {
     throw new RequestError(422, 'Método no válido: envía {"metodo":"codigo"} o {"metodo":"qr"}.');
   }
-  return method;
+  if (method !== "codigo" || typeof parsed !== "object" || parsed === null || !("numero" in parsed)) {
+    return { method, phone: undefined };
+  }
+  const phone = typeof parsed.numero === "string" ? normalizePhone(parsed.numero) : "";
+  if (!PHONE_PATTERN.test(phone)) {
+    // The message must not echo the number.
+    throw new RequestError(422, "Número no válido: usa solo dígitos con código de país.");
+  }
+  return { method, phone };
 }

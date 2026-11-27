@@ -53,7 +53,7 @@ El bot no se vincula solo: sin sesión no abre conexión con WhatsApp ni pide c�
 3. El QR (o el código `ABCD-EFGH`) aparece en la terminal del bot. Solo se imprime en una terminal interactiva, nunca cuando corre como servicio; en ese caso se obtiene con `GET /estado` (campos `qr` y `codigo`) o desde la app.
 4. En el móvil del bot: WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo. Escanea el QR o elige «Vincular con número de teléfono» e introduce el código.
 
-Para vincular con código (`"metodo":"codigo"`) hace falta `PAIRING_PHONE` en `.env` (número de la cuenta del bot, con código de país). Si el intento caduca o no se completa, se descartan sus credenciales y no se repite solo: vuelve a solicitarlo.
+Para vincular con código (`"metodo":"codigo"`) hace falta el número de la cuenta del bot, con código de país: se escribe en la app (campo `numero` de la petición) o se deja en `PAIRING_PHONE` en `.env`. Si el intento caduca o no se completa, se descartan sus credenciales y no se repite solo: vuelve a solicitarlo.
 
 El QR se dibuja con `qrcode-terminal` (versión exacta 0.12.0): librería mínima y sin dependencias que dibuja el QR en la terminal; Baileys ya no lo hace por su cuenta.
 
@@ -95,7 +95,7 @@ Escucha solo en `127.0.0.1:CONTROL_PORT` (8787). Cada petición necesita `Author
 | `GET /estado` | Devuelve vinculación, conexión, si está activo, código o QR y el último aviso. |
 | `POST /activar` | Activa el bot. 409 sin conexión con WhatsApp. |
 | `POST /pausar` | Lo pone en pausa. |
-| `POST /vinculacion` | Cuerpo `{"metodo":"codigo"}` o `{"metodo":"qr"}`. |
+| `POST /vinculacion` | Cuerpo `{"metodo":"codigo"}` o `{"metodo":"qr"}`. Con código admite `"numero"`, que manda sobre `PAIRING_PHONE`. |
 | `DELETE /vinculacion` | Desvincula. 409 si no está vinculado y conectado. |
 
 Además: solo admite el `Host` `127.0.0.1`, `localhost` o `*.ts.net`; rechaza las peticiones con `Origin` (navegadores) y los cuerpos de más de 1 KiB; tras 10 tokens erróneos en un minuto, las peticiones con token erróneo reciben 429 hasta que pase la ventana. Las que llevan el token correcto se atienden siempre, para que nada te impida pausar el bot.
@@ -113,6 +113,16 @@ curl -H "Authorization: Bearer $token" http://127.0.0.1:8787/estado
 ```
 
 Para cambiarlo, borra el archivo y reinicia el bot.
+
+### Enlace de conexión para la app
+
+Al arrancar en una terminal interactiva (nunca como servicio ni en el log), el bot imprime un enlace y su QR para conectar la app sin copiar el token a mano:
+
+```
+conversorstickers://bot#u=<direccion codificada>&t=<token>
+```
+
+La dirección es `https://<nombre>.ts.net` si Tailscale está instalado y con sesión (entonces hace falta `tailscale serve --bg <puerto>`, ver abajo); si no, `http://127.0.0.1:<CONTROL_PORT>`. El token va en el fragmento (`#`), que no se envía a ningún servidor. **El enlace da control total del bot: no lo compartas.**
 
 ### Acceso desde el celular con Tailscale
 
@@ -170,7 +180,7 @@ Sin pie, se usa el vídeo entero. Si hay una clave desconocida o un valor no vá
 | `ALLOWED_NUMBERS` | Obligatoria. Números con código de país, sin `+`, separados por comas. |
 | `MAX_SOUND_SECONDS` | Duración máxima del audio, entero entre 1 y 60 (por defecto 10). Más de 10 s es experimental: se desconoce el límite real de WhatsApp. |
 | `AUTH_DIR` | Carpeta de la sesión (por defecto `./auth`). |
-| `PAIRING_PHONE` | Opcional. Necesario solo para vincular con código. |
+| `PAIRING_PHONE` | Opcional. Número para vincular con código cuando la petición no lo trae. |
 | `CONTROL_PORT` | Puerto de la API de control en `127.0.0.1` (por defecto 8787). |
 | `CONTROL_TOKEN_FILE` | Archivo del token de la API (por defecto `./control-token`). Si cambias la ruta, déjalo fuera del repositorio. |
 | `MODO_CHAT_PROPIO` | `si` o `no` (por defecto). Ver [Modo de chat propio](#modo-de-chat-propio). |
